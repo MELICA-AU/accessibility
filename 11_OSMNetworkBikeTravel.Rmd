@@ -41,23 +41,24 @@ In this step, we use the osmdata package to retrieve data from OpenStreetMap. Th
 
 ```{r setup_study_area}
 venue <-sf::st_sfc(sf::st_point(c(10.193481442350198,56.15875458855773)), crs = 4326)
-area <-sf::st_buffer(venue, units::set_units(3, "km"))
+circle <-sf::st_buffer(venue, units::set_units(5, "km"))
 ```
 
 Now we query all streets within our area of interest from OpenStreetMap. In OpenStreetMap, streets are those features that have a value for the highway key. In R, they will be represented by an sf data frame with linestring geometries. Since some streets may be drawn as a closed polygon (like a square or a roundabout) we convert polygon borders into linestrings, before extracting only the linestrings from the API response. Finally, we cut streets at the edge of our area of interest and make sure all of them are single linestrings, meaning that the different parts of multi-linestrings will be seen as different street segments (note that to do this properly we first need to cast everything to multi-linestrings).
 
 ```{r query_osm_streets}
-streets <- osmdata::opq(sf::st_bbox(area)) %>%
+streets <- osmdata::opq(sf::st_bbox(circle)) %>%
   osmdata::add_osm_feature(key = "highway") %>%
   osmdata::osmdata_sf() %>%
   osmdata::osm_poly2line() %>%
   purrr::pluck("osm_lines") %>%
-  sf::st_intersection(area) %>%
+  sf::st_intersection(circle) %>%
   sf::st_cast("MULTILINESTRING") %>%
   sf::st_cast("LINESTRING")
 
-# saveRDS(streets, "../data/aarhus_streets_osm.rds")
+saveRDS(streets, "data/aarhus_streets_osm5km.rds")
 #streets <- readRDS("../data/aarhus_streets_osm.rds")
+area <- circle
 ```
 
 
@@ -67,10 +68,10 @@ However, shelter locations do not yet exist in OSM, and so we will load our own 
 
 ```{r load_custom_point_data}
 # sikringsrum from BBR
-SR <- st_read("../output_data/SK_bbr_oc_addresses.geojson") %>% 
+SR <- st_read("../shelter-data/output_data/SR.geojson") %>% 
    st_transform(crs= 4326)
 # betondaekning grave from fieldrecording, kommunens data, and CDC records
-BTG <- st_read("../output_data/done20241012.geojson")
+BTG <- readRDS("../shelter-data/output_data/BDG_long.rds")
 ```
 
 Let us look at the result: a circle of lines with SR represented by red points
@@ -92,10 +93,10 @@ streets$length <-sf::st_length(streets) %>%
 plot(dplyr::select(streets, length))
 ```
 
-For the cycling speed, we define a default speed which we adjust based on the gradient of the street segment. To do so, we first need to estimate the gradient of each street segment. This requires a Digital Elevation Model (DEM), which basically is a spatial grid covering an area and storing an elevation value for each cell. We use a DEM for Denmark with a 10m resolution, available as open data from the dataforsyning in EPSG 4326. You still need to crop the full version of it in the data folder of this repository, which we load with the raster package. To estimate gradients of linestrings with this DEM, we use the slopes package.
+For the cycling speed, we define a default speed which we adjust based on the gradient of the street segment. To do so, we first need to estimate the gradient of each street segment. This requires a Digital Elevation Model (DEM), which basically is a spatial grid covering an area and storing an elevation value for each cell. We use a DEM for Denmark with a 10m resolution, available as open data from the dataforsyning in EPSG 4326. You need to crop the full version of it if downloading anew. To estimate gradients of linestrings with this DEM, we use the slopes package.
 
 ```{r estimate_street_gradients}
-dem <- raster("../data/dem_Aarhus10m.tif") 
+dem <- raster("data/dem_Aarhus10m.tif") 
 gradients <- slopes::slope_raster(streets, dem, directed = TRUE) * 100
 
 ```
@@ -162,8 +163,9 @@ plot(dplyr::select(streets,level))
 # same result     
 plot(streets["level"])
 ```
+
 ```{r}
-st_write(streets, "../data/aarhus_streets_enriched.geojson")
+st_write(streets, "data/aarhus_streets_enriched.geojson")
 ```
 
 # 4. Construct a routable street network
@@ -195,21 +197,21 @@ round(node_count_largest / node_count_all * 100)
 
 Luckily, the sfnetworks package contains functions to pre-process and clean networks. One of them is `to_spatial_subdivision()`, which connects streets when they share internal vertices rather than only endpoints. This results in a network that still has some disconnected components (which is to be expected since we cut the network at the buffer boundaries), but with the largest of them containing almost all nodes.
 
-Tip
+Tip: DON'T USE THE NEXT CHUNK ON AARHUS OSM network
 There are many more network pre-processing and cleaning functions in sfnetworks. See the `sfnetworks documentation` for details.
-```{r preprocess_network_connectivity}
-network <-network %>%
+```{r preprocess_network_connectivity, eval = FALSE}
+network1 <-network %>%
   tidygraph::convert(sfnetworks::to_spatial_subdivision)
 
 par(mar = c(0, 0, 0, 0))
-plot(network, cex = 0.5)
+plot(network1, cex = 0.5)
 
-tidygraph::with_graph(network, tidygraph::graph_component_count())
+tidygraph::with_graph(network1, tidygraph::graph_component_count())
 
-node_count_all <-network %>%
+node_count_all <-network1 %>%
   tidygraph::with_graph(tidygraph::graph_order())
 
-node_count_largest <-network %>%
+node_count_largest <-network1 %>%
   tidygraph::convert(tidygraph::to_largest_component) %>%
   tidygraph::with_graph(tidygraph::graph_order())
 
@@ -218,11 +220,12 @@ round(node_count_largest / node_count_all * 100)
 
 Now we can select the largest component without having to worry we loose a lot of data.
 ```{r select_largest_network_component}
-network <-network %>%
+network <- network %>%
   tidygraph::convert(tidygraph::to_largest_component)
 
 par(mar = c(0, 0, 0, 0))
 plot(network, cex = 0.5)
+plot(BTG$geometry, add = TRUE, col = "purple")
 ```
 
 # 5. Compute accessibility to restaurants
@@ -247,7 +250,7 @@ network %>%
 valid_network <- network %>%
   activate("edges") %>%
   filter(!is.na(time))  # Keep only edges where time is not NaN
-#saveRDS(valid_network, "../data/aarhus_network_osm.rds")
+saveRDS(valid_network, "data/aarhus_network_osm5km.rds")
 ```
 
 
