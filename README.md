@@ -39,7 +39,7 @@ OSM road data were extracted in 2024. Shelter-data were digitized and streamline
 3. Coffee
 
 ## Radius of 3km around Den Gamle By in the center of Aarhus
-![Example screenshot](./11_OSMNetworkBikeTravel_files/figure-html/unnamed-chunk-5-1)
+![Example screenshot](./11_OSMNetworkBikeTravel_files/figure-html/unnamed-chunk-5-1.png)
 
 
 
